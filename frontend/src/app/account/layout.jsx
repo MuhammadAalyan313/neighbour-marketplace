@@ -1,0 +1,1 @@
+import {DashboardShell} from '@/components/shell';export const metadata={title:'Buyer account',robots:{index:false,follow:false}};export default function Layout({children}){return <DashboardShell role="buyer">{children}</DashboardShell>}

@@ -1,0 +1,1 @@
+'use client';export default function ErrorPage({reset}){return <main id="main" className="empty"><h1>Something went wrong</h1><p>Try again to continue.</p><button className="btn" onClick={reset}>Try again</button></main>}

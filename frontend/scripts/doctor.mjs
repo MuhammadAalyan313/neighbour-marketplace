@@ -1,0 +1,15 @@
+import {readFileSync,existsSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {inspectDependencies} from './dependency-check.mjs';
+const root=fileURLToPath(new URL('../',import.meta.url));
+const pkg=JSON.parse(readFileSync(join(root,'package.json'),'utf8'));
+const [major,minor]=process.versions.node.split('.').map(Number);
+const {failures,versions}=inspectDependencies(root,pkg.dependencies);
+if(!(major===24||(major===22&&minor>=13)))failures.push('Use an up-to-date Node.js 22 LTS (22.13+) or 24 LTS.');
+if(!existsSync(join(root,'.env.local')))console.warn('NOTE: .env.local is missing. Run npm run setup before connecting to Laravel.');
+if(!existsSync(join(root,'package-lock.json')))console.warn('NOTE: No package-lock.json yet; run npm install and retain the generated lockfile.');
+const apiRoute=readFileSync(join(root,'src/app/api/backend/[...path]/route.js'),'utf8');
+if(/\bexport\s+default\b/.test(apiRoute))failures.push('API route contains a default export; restore the original named HTTP handlers.');
+console.log('Node:',process.version,'| Installed:',JSON.stringify(versions));
+if(failures.length){for(const failure of failures)console.error('FAIL:',failure);process.exitCode=1;}else console.log('PASS: runtime version, dependency versions and targeted Warning.js check.');

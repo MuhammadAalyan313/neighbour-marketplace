@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neighbour Marketplace — Local Web Push Test</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
+    body { max-width: 840px; margin: 36px auto; padding: 0 18px; line-height: 1.5; color: #17202a; }
+    h1 { margin-bottom: 6px; font-size: 1.6rem; }
+    .note { color: #596579; margin-top: 0; }
+    label { display:block; margin-top: 16px; margin-bottom: 5px; font-weight: 600; }
+    input { width:100%; box-sizing:border-box; padding: 11px; border:1px solid #b7c0cf; border-radius:6px; font:inherit; }
+    .actions { margin-top: 20px; display:flex; gap:10px; flex-wrap: wrap; }
+    button { padding:10px 14px; background:#21499d; color:white; border:0; border-radius:6px; cursor:pointer; }
+    button.secondary { background:#445266; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    pre { background:#142033; color:#e9f1ff; padding:16px; border-radius:8px; overflow:auto; min-height:160px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .warn { padding:10px 14px; border-left:4px solid #d19a2a; background:#fff7e4; }
+  </style>
+</head>
+<body>
+  <h1>Neighbour Marketplace — Browser Push Test</h1>
+  <p class="note">Local development only. Remove this file and <code>push-sw.js</code> after testing. Never put private VAPID keys or passwords here. Tokens are not saved.</p>
+  <p class="warn">Open from <strong>http://127.0.0.1:8000/push-test.html</strong> (not as a file). Use the same browser origin for all steps. Test with your own account only.</p>
+
+  <label for="publicKey">VAPID_PUBLIC_KEY (public)</label>
+  <input id="publicKey" autocomplete="off" spellcheck="false" placeholder="Paste VAPID_PUBLIC_KEY from .env">
+
+  <label for="token">Buyer Sanctum access token (without Bearer prefix)</label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste buyer login access token">
+
+  <div class="actions">
+    <button id="subscribe">1. Allow notifications & subscribe</button>
+    <button id="localTest" class="secondary">2. Show local test notification</button>
+    <button id="unsubscribe" class="secondary">Unsubscribe this browser</button>
+  </div>
+
+  <h2>Logs</h2>
+  <pre id="logs" aria-live="polite"></pre>
+
+  <script>
+    (() => {
+      'use strict';
+      const $ = id => document.getElementById(id);
+      const logs = $('logs');
+      const log = (message) => {
+        logs.textContent += `[${new Date().toLocaleTimeString()}] ${message}\n`;
+        logs.scrollTop = logs.scrollHeight;
+      };
+      const errorMessage = (err) => err instanceof Error ? err.message : String(err);
+      function publicKeyToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const normalized = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(normalized);
+        return Uint8Array.from(raw, ch => ch.charCodeAt(0));
+      }
+      async function getRegistration() {
+        if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+          throw new Error('Push unsupported: use Chrome/Edge on localhost or HTTPS, and enable Service Workers.');
+        }
+        const registration = await navigator.serviceWorker.register('/push-sw.js', { scope: '/' });
+        await navigator.serviceWorker.ready;
+        log(`Service worker ready: ${registration.scope}`);
+        return registration;
+      }
+      async function apiRequest(method, data) {
+        const token = $('token').value.trim().replace(/^Bearer\s+/i, '');
+        if (!token) throw new Error('Buyer Sanctum token is required.');
+        const response = await fetch('/api/v1/push-subscriptions', {
+          method,
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(data),
+          credentials: 'omit',
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const detail = JSON.stringify(result.errors || result.message || result);
+          throw new Error(`API HTTP ${response.status}: ${detail}`);
+        }
+        return result;
+      }
+      function setBusy(busy) {
+        for (const id of ['subscribe', 'localTest', 'unsubscribe']) $(id).disabled = busy;
+      }
+      $('subscribe').addEventListener('click', async () => {
+        setBusy(true);
+        try {
+          const key = $('publicKey').value.trim();
+          if (!key) throw new Error('VAPID public key is required.');
+          if (!$('token').value.trim()) throw new Error('Buyer Sanctum token is required.');
+          if (!('Notification' in window)) throw new Error('Browser notifications are not supported.');
+          const registration = await getRegistration();
+          const permission = await Notification.requestPermission();
+          log(`Notification permission: ${permission}`);
+          if (permission !== 'granted') throw new Error('Notification permission was not granted.');
+          const requestedKey = publicKeyToUint8Array(key);
+          let subscription = await registration.pushManager.getSubscription();
+          if (subscription) {
+            const existingKey = subscription.options?.applicationServerKey;
+            if (existingKey && btoa(String.fromCharCode(...new Uint8Array(existingKey))) !==
+                btoa(String.fromCharCode(...requestedKey))) {
+              throw new Error('Existing subscription uses a different VAPID key. Unsubscribe first.');
+            }
+            log('Reusing existing browser push subscription.');
+          } else {
+            subscription = await registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: requestedKey,
+            });
+            log('Browser push subscription created.');
+          }
+          const json = subscription.toJSON();
+          if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+            throw new Error('Browser subscription does not contain endpoint/p256dh/auth.');
+          }
+          await apiRequest('POST', {
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+          });
+          log('SUCCESS: subscription registered through /api/v1/push-subscriptions (HTTP 201).');
+          log('Next: create a fresh buyer order, find its new PUSH outbox ID, and dispatch that one job.');
+        } catch (error) { log(`ERROR: ${errorMessage(error)}`); }
+        finally { setBusy(false); }
+      });
+      $('localTest').addEventListener('click', async () => {
+        setBusy(true);
+        try {
+          if (Notification.permission !== 'granted') throw new Error('First allow notifications.');
+          const reg = await getRegistration();
+          await reg.showNotification('Neighbour Marketplace: local test', {
+            body: 'Browser notification display works. This is NOT a server push.',
+            tag: 'neighbour-local-display-test',
+            data: { url: '/' },
+          });
+          log('LOCAL DISPLAY TEST: requested browser notification (does not test server push).');
+        } catch (error) { log(`ERROR: ${errorMessage(error)}`); }
+        finally { setBusy(false); }
+      });
+      $('unsubscribe').addEventListener('click', async () => {
+        setBusy(true);
+        try {
+          const reg = await getRegistration();
+          const subscription = await reg.pushManager.getSubscription();
+          if (!subscription) { log('No existing browser subscription.'); return; }
+          await apiRequest('DELETE', { endpoint: subscription.endpoint });
+          await subscription.unsubscribe();
+          log('SUCCESS: subscription removed from API and browser.');
+        } catch (error) { log(`ERROR: ${errorMessage(error)}`); }
+        finally { setBusy(false); }
+      });
+      log(`Origin: ${location.origin}`);
+      log('This page never logs the access token or private subscription keys.');
+    })();
+  </script>
+</body>
+</html>

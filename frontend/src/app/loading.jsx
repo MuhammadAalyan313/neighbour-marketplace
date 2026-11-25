@@ -1,0 +1,1 @@
+export default function Loading(){return <main id="main" className="market-main"><div className="skeleton-grid" role="status" aria-label="Loading page">{[1,2,3,4].map(x=><div className="skeleton" key={x}/>)}</div></main>}

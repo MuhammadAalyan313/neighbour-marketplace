@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Reverb Private Channel Test</title>
+<script src="https://cdn.jsdelivr.net/npm/pusher-js@8.4.0/dist/web/pusher.min.js"></script>
+<style>body{font-family:system-ui,sans-serif;max-width:780px;margin:28px auto;padding:0 16px;background:#f8fafc;color:#0f172a}h1{font-size:1.5rem}label{display:block;font-weight:600;margin:14px 0 5px}input{box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px}button{margin:14px 8px 10px 0;padding:10px 16px;border:0;border-radius:6px;background:#0f766e;color:white;cursor:pointer}button:disabled{opacity:.45}#disconnect{background:#475569}pre{height:360px;overflow:auto;white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;font-size:13px}.note{font-size:14px;color:#475569}</style>
+</head>
+<body>
+<h1>Local Laravel Reverb — private channel test</h1>
+<p class="note">Local development only. Keep this file out of production. Enter the token here at runtime; do not save it in the file or share screenshots containing it.</p>
+<label for="key">REVERB_APP_KEY (public application key)</label><input id="key" autocomplete="off" placeholder="App key">
+<label for="token">Sanctum Bearer token</label><input id="token" type="password" autocomplete="off" placeholder="Seller or buyer token">
+<label for="channel">Channel (without private- prefix)</label><input id="channel" value="seller.1" placeholder="seller.1 or buyer.2">
+<button id="connect">Connect and subscribe</button><button id="disconnect" disabled>Disconnect</button>
+<pre id="log" aria-live="polite"></pre>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  let client = null;
+  function log(label, value) {
+    const time = new Date().toLocaleTimeString();
+    const detail = value === undefined ? '' : '\n' + (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+    $('log').textContent += `[${time}] ${label}${detail}\n`;
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+  function disconnect() {
+    if (client) { client.disconnect(); client = null; }
+    $('connect').disabled = false;
+    $('disconnect').disabled = true;
+    log('Disconnected');
+  }
+  $('disconnect').addEventListener('click', disconnect);
+  $('connect').addEventListener('click', () => {
+    const key = $('key').value.trim();
+    const token = $('token').value.trim();
+    const rawChannel = $('channel').value.trim().replace(/^private-/, '');
+    if (!key || !token || !/^(seller|buyer)\.[1-9][0-9]*$/.test(rawChannel)) {
+      log('Enter app key, token, and a valid seller.ID or buyer.ID channel.'); return;
+    }
+    if (!window.Pusher) { log('Pusher JS unavailable: check CDN/network connection.'); return; }
+    if (client) disconnect();
+    $('log').textContent = '';
+    $('connect').disabled = true;
+    $('disconnect').disabled = false;
+    const fullChannel = 'private-' + rawChannel;
+    const authToken = token;
+    log('Connecting to Reverb ' + location.hostname + ':8080');
+    client = new Pusher(key, {
+      cluster: 'mt1',
+      wsHost: location.hostname,
+      wsPort: 8080,
+      wssPort: 8080,
+      forceTLS: false,
+      enabledTransports: ['ws'],
+      channelAuthorization: {
+        transport: 'ajax',
+        customHandler: async (params, callback) => {
+          try {
+            const response = await fetch('/api/broadcasting/auth', {
+              method: 'POST',
+              headers: {'Accept':'application/json','Content-Type':'application/json','Authorization':'Bearer ' + authToken},
+              body: JSON.stringify({socket_id:params.socketId,channel_name:params.channelName}),
+              credentials:'omit'
+            });
+            const text = await response.text();
+            if (!response.ok) { log('Authorization denied HTTP ' + response.status); callback(new Error('HTTP ' + response.status), null); return; }
+            const result = JSON.parse(text);
+            callback(null, result);
+          } catch (error) { log('Authorization request error', error.message); callback(error, null); }
+        }
+      }
+    });
+    client.connection.bind('connected', () => log('WebSocket connected; socket ' + client.connection.socket_id));
+    client.connection.bind('error', error => log('WebSocket error', error));
+    client.connection.bind('disconnected', () => log('WebSocket disconnected'));
+    const channel = client.subscribe(fullChannel);
+    channel.bind('pusher:subscription_succeeded', () => log('AUTHORIZED and subscribed: ' + fullChannel));
+    channel.bind('pusher:subscription_error', error => log('Subscription failed', error));
+    channel.bind('order.created', data => log('RECEIVED order.created', data));
+    channel.bind('order.status.updated', data => log('RECEIVED order.status.updated', data));
+    log('Requested subscription to ' + fullChannel);
+  });
+})();
+</script>
+</body>
+</html>

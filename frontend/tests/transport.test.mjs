@@ -1,0 +1,14 @@
+import test,{before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {httpTransport} from '../src/lib/http-transport.mjs';
+import {proxyRequest} from '../src/lib/proxy.mjs';
+import config from '../next.config.mjs';
+let server,base,calls=0;
+before(async()=>{server=createServer(async(req,res)=>{calls++;for await(const _ of req){};if(req.url.includes('large')){res.writeHead(500,{'Content-Type':'text/html','Connection':'close'});res.end('x'.repeat(200000));return;}if(req.url.includes('truncated')){res.writeHead(200,{'Content-Length':'1000'});res.flushHeaders();res.write('short');res.destroy();return;}if(req.url.includes('redirect')){res.writeHead(302,{Location:'/other'});res.end();return;}if(req.url.includes('slow'))return;res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({data:{token:'test-token',user:{id:1}}}));});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`});
+after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r))});
+test('large server error is fully consumed and sanitized',async()=>{const r=await proxyRequest({method:'GET',parts:['marketplace','categories'],base,searchParams:new URLSearchParams('large=1')});assert.equal(r.status,502);assert.match(r.data.message,/Laravel/);assert.ok(r.data.message.length<200)});
+test('incomplete response rejects without crashing',async()=>{await assert.rejects(httpTransport(base+'/truncated'))});
+test('redirect never followed',async()=>{const n=calls;await assert.rejects(httpTransport(base+'/redirect'));assert.equal(calls,n+1)});
+test('timeout aborts request',async()=>{await assert.rejects(httpTransport(base+'/slow',{signal:AbortSignal.timeout(100)}))});
+test('dashboard aliases point to existing front end pages',async()=>{const rules=await config.redirects();assert.equal(rules.find(r=>r.source==='/admin/dashboard').destination,'/admin');assert.equal(rules.find(r=>r.source==='/seller/dashboard').destination,'/seller');assert.equal(rules.find(r=>r.source==='/buyer/dashboard').destination,'/account')});

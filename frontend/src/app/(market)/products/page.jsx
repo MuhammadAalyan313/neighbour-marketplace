@@ -1,0 +1,1 @@
+import {Products} from '@/features/marketplace';export const metadata={title:'Explore products'};export default async function Page({searchParams}){const p=await searchParams;return <Products key={String(p.search)+String(p.category_id)} initialSearch={typeof p.search==='string'?p.search:''} initialCategory={typeof p.category_id==='string'?p.category_id:''}/>}

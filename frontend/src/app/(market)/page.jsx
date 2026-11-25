@@ -1,0 +1,1 @@
+import {Home} from '@/features/marketplace';import {publicData} from '@/lib/server';export default async function Page(){const [categories,stores,products]=await Promise.all(['marketplace/categories','marketplace/stores?per_page=8','marketplace/products?sort=popular&per_page=12'].map(publicData));return <Home initial={{categories,stores,products}}/>}

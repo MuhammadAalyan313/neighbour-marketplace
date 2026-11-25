@@ -1,0 +1,1 @@
+import {DashboardShell} from '@/components/shell';export const metadata={title:'Admin account',robots:{index:false,follow:false}};export default function Layout({children}){return <DashboardShell role="admin">{children}</DashboardShell>}
